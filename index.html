@@ -542,47 +542,46 @@ document.getElementById("dateDisplay").textContent =
 
 // ── Fetch all feeds ───────────────────────────────
 async function fetchFeed(feed) {
-  // Tenta rss2json primeiro
-  try {
-    const url = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feed.url)}&count=8&api_key=`;
-    const res = await fetch(url);
-    const data = await res.json();
-    if (data.status === "ok" && data.items?.length) {
-      return data.items.map(item => ({
-        title: item.title || "",
-        link: item.link || "#",
-        desc: stripHtml(item.description || item.content || ""),
-        image: item.thumbnail || item.enclosure?.link || "",
-        date: item.pubDate ? new Date(item.pubDate) : new Date(),
-        source: feed.name,
-        cat: feed.cat,
-      }));
-    }
-  } catch {}
+  const proxies = [
+    `https://api.allorigins.win/get?url=${encodeURIComponent(feed.url)}`,
+    `https://corsproxy.io/?${encodeURIComponent(feed.url)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(feed.url)}`,
+  ];
 
-  // Fallback: AllOrigins proxy para ler RSS direto
-  try {
-    const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(feed.url)}`;
-    const res = await fetch(proxy);
-    const data = await res.json();
-    if (!data.contents) return [];
-    const parser = new DOMParser();
-    const xml = parser.parseFromString(data.contents, "text/xml");
-    const items = Array.from(xml.querySelectorAll("item, entry")).slice(0, 8);
-    return items.map(item => {
-      const get = (tag) => item.querySelector(tag)?.textContent?.trim() || "";
-      const getAttr = (tag, attr) => item.querySelector(tag)?.getAttribute(attr) || "";
-      return {
-        title: get("title"),
-        link: get("link") || getAttr("link", "href"),
-        desc: stripHtml(get("description") || get("summary") || get("content")),
-        image: getAttr("enclosure", "url") || getAttr("media\:content", "url") || "",
-        date: new Date(get("pubDate") || get("published") || Date.now()),
-        source: feed.name,
-        cat: feed.cat,
-      };
-    }).filter(a => a.title);
-  } catch { return []; }
+  for (const proxyUrl of proxies) {
+    try {
+      const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(8000) });
+      let text = "";
+      if (proxyUrl.includes("allorigins")) {
+        const data = await res.json();
+        text = data.contents || "";
+      } else {
+        text = await res.text();
+      }
+      if (!text) continue;
+
+      const parser = new DOMParser();
+      const xml = parser.parseFromString(text, "text/xml");
+      const items = Array.from(xml.querySelectorAll("item, entry")).slice(0, 8);
+      if (!items.length) continue;
+
+      return items.map(item => {
+        const get = (tag) => item.querySelector(tag)?.textContent?.trim() || "";
+        const getAttr = (tag, attr) => item.querySelector(tag)?.getAttribute(attr) || "";
+        const imgMatch = get("description").match(/<img[^>]+src=["']([^"']+)["']/i);
+        return {
+          title: get("title"),
+          link: get("link") || getAttr("link", "href"),
+          desc: stripHtml(get("description") || get("summary") || get("content")),
+          image: getAttr("enclosure", "url") || imgMatch?.[1] || "",
+          date: new Date(get("pubDate") || get("published") || Date.now()),
+          source: feed.name,
+          cat: feed.cat,
+        };
+      }).filter(a => a.title && a.link);
+    } catch { continue; }
+  }
+  return [];
 }
 
 async function loadAll() {
